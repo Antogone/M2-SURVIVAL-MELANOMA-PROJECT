@@ -8,4 +8,42 @@ date: "2023-01-26"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+## Chargement des librairies
+```{r}
+library(survival)
+library(tidyverse)
+library(randomForestSRC)
+library(MASS)
+```
+
+```{r}
+data(follic, package = "randomForestSRC") -> follic_data
+Melanoma -> mela
+
+```
+
+3 traitemetns :
+- Obs
+- Lev
+- Lev+5FU
+
+2 Event :
+- Mort
+- Récidive
+
+
+Et tu cherche a voir si le TTT empêche la rechute
+
+
+```{r}
+
+
+df %>% 
+  filter(status != 1) %>% 
+  mutate(id = row_number(),
+         non_caucasien = if_else(ethnie ==1,0,1)) -> df
+
+df %>% 
+  select(ID,condition)
+```
+
