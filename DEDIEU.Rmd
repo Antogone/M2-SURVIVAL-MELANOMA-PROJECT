@@ -9,41 +9,216 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Chargement des librairies
-```{r}
+```{r message=FALSE, warning=FALSE}
 library(survival)
 library(tidyverse)
-library(randomForestSRC)
 library(MASS)
+library(cmprsk)
+library(packHV)
+library(survminer)
 ```
 
 ```{r}
-data(follic, package = "randomForestSRC") -> follic_data
-Melanoma -> mela
-
+mela = Melanoma
 ```
-
-3 traitemetns :
-- Obs
-- Lev
-- Lev+5FU
-
-2 Event :
-- Mort
-- Récidive
-
-
-Et tu cherche a voir si le TTT empêche la rechute
 
 
 ```{r}
+mela %>% mutate(
+  status = status,
+  sex= sex %>% as.factor(),
+  ulcer = ulcer %>% as.factor(),
+  status_bin = if_else(status ==1,0,1) ,
+  id = row_number()) -> mela
 
-
-df %>% 
-  filter(status != 1) %>% 
-  mutate(id = row_number(),
-         non_caucasien = if_else(ethnie ==1,0,1)) -> df
-
-df %>% 
-  select(ID,condition)
+mela %>% summary() 
 ```
+
+
+time :survival time in days, possibly censored.
+Event en compétition : 
+status : 1 died from melanoma, 2 alive, 3 dead from other causes.
+ 
+Variable hierarchique :
+ulcer : 1 = presence, 0 = absence.
+
+Les autres variables : 
+sex: 1 = male, 0 = female.
+age: age in years.
+year: of operation.
+thickness :tumour thickness in mm.
+
+https://rdrr.io/cran/MASS/man/Melanoma.html
+
+1.	Décrire la base de données en fonction du traitement (test stat et visualisation)
+```{r}
+#chi2 et student ??Genre voir si les deux populations des deux traitements sont comparables et tout...
+```
+
+2.	Tracer les courbes de survie de chaque événement
+courbes de survie : test de logrank 
+```{r}
+# estimation de la fonction de survie (proba de ne pas avoir fait l’event avant le temps t ) par la méthode KM
+km <- survfit(Surv(time,status_bin)~ulcer,data=mela) 
+
+
+# plot de la fonction de survie estimée
+ggsurvplot(km, 
+           data = mela,
+           surv.median.line = "hv", 
+           
+ # Change legends: title & labels
+ legend.title = "Ucler",
+ legend.labs = c("Absent", "Présent"),
+ # Add p-value and intervals
+ pval = TRUE,
+ conf.int = TRUE,
+ 
+ # Add risk table
+ risk.table = TRUE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+ palette = c("#C0B9DD", "#77CB85"),
+ ggtheme = theme_bw())
+
+
+# permet de comparer les courbes de survie par le test du logrank
+#H0 Egalité des fonctions de survie vs.
+#H1 Au moins une des fonctions de survie est différente des autres
+
+#comparer le nb d'event obs dans chaque groupe (traitement ici) à ce qui est attendu sous H0
+survdiff(Surv(time,status_bin)~ulcer,data=mela)
+
+
+```
+
+3.	Quantifier l’effet du traitement sur chaque événement, ajusté sur les facteurs
+
+Modle de cox ?
+Modélisation de la fonction de risque instantané en prenant en compte les covariables Z
+```{r}
+mela %>% 
+  mutate(ucler = ulcer %>% as.factor) -> mela
+
+#Creation du modèle de cox
+model <- coxph(Surv(time,status_bin)~ulcer+thickness+sex+age+year,data=mela)
+summary(model)
+
+# HHP
+cox.zph(model)
+
+# Hypothèses de log linéarité
+resmart = residuals(model)
+
+# Age
+plot(mela$age, resmart, pch = 20) +
+lines(loess.smooth(mela$age, resmart), lwd=2, col="blue")
+
+# year
+plot(mela$year, resmart, pch = 20) +
+lines(loess.smooth(mela$year, resmart), lwd=2, col="blue")
+
+# thickness
+plot(mela$thickness, resmart, pch = 20)+
+lines(loess.smooth(mela$thickness, resmart), lwd=2, col="blue")
+
+```
+
+4.	Prendre en compte l’effet hiérarchique
+```{r}
+
+```
+
+5.	Quelles sont les limites de ces analyses?
+
+
+6.	Faire les mêmes analyses en risques compétitifs: Tracer incidence cumulée et utiliser le modèle de Fine and Gray
+```{r}
+#KM
+km <- survfit(Surv(time,status)~ulcer,data=mela)
+summary(km)
+ggsurvplot(km, 
+           data = mela,
+           surv.median.line = "hv", 
+           
+ # Change legends: title & labels
+ legend.title = "Ucler",
+ legend.labs = c("Absent", "Présent"),
+ # Add p-value and intervals
+ pval = TRUE,
+ conf.int = TRUE,
+ 
+ # Add risk table
+ risk.table = TRUE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+ palette = c("#C0B9DD", "#77CB85"),
+ ggtheme = theme_bw())
+
+
+#Kalbfleisch et Prentice
+KM2<-plot(cuminc(mela$time,mela$status,mela$ulcer),
+          col=c("blue","red","green","blue","red","green"),lty=c(1,1,2,2,3,3),
+          xlab="Temps",ylab="Incidence cumulée",
+          main="Kalbfleish et Prentice")
+
+#test de gray
+cuminc(mela$time,mela$status,mela$ulcer)
+
+
+#Model de fine and gray
+cov1 <- model.matrix(~ factor(ulcer) +thickness+sex+age+year,data = mela)[, -1] # met en forme les covariables pour le modèle
+
+mod2<-crr(mela$time,mela$status,cov1=cov1)
+summary(mod2)
+
+for(j in 1:ncol(mod2$res))
+scatter.smooth(mod2$uft, mod2$res[,j],
+               main = names(mod2$coef)[j],
+               xlab ="Temps",
+               ylab ="Résidus de Schoenfeld")
+
+
+
+#test de lin
+library(remotes)
+library(crskdiag) 
+diag_crr(Crsk(stop,recidive)~treatment+number,data=bladder_v2,test="prop",seed=1234)#permet de faire le test de Lin
+```
+
+7.	Commenter
+```{r}
+install.packages('/Users/anto/Downloads/crskdiag_1.0.1.tar', repos=NULL, type='source')
+```
+
+8.	Choisir une méthode de validation des données : traint-test split, k-folds, etc.
+```{r}
+
+```
+
+9.	Choisir une méthode de ML afin de classer les patients selon l’événement d’intérêt
+```{r}
+
+```
+
+10.	Evaluer les performances du modèle
+```{r}
+
+```
+
+11.	Identifier les variables qui semblent le mieux permettre cette classification
+```{r}
+
+```
+
+12.	Répondre à la question du projet
+```{r}
+
+```
+
+13.	Enoncer les difficultés rencontrées et les solutions apportées
+```{r}
+
+```
+
 
