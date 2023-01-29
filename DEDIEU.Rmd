@@ -16,60 +16,67 @@ library(MASS)
 library(cmprsk)
 library(packHV)
 library(survminer)
+library(ggsurvfit)
+library(gtsummary)
+library(tidycmprsk)
+library(finalfit)
+library(randomForestSRC)
+library(flextable)
+library(Hmisc)
+library(ggfortify)
+library(ranger)
+library(condsurv)#remotes::install_github("zabore/condsurv")
 ```
+
 
 ```{r}
-mela = Melanoma
+Melanoma %>%
+  summary()
 ```
 
+time survival time in days, possibly censored.
+status 1 died from melanoma, 2 alive, 3 dead from other causes. but recoded in [non-standard]
 
-```{r}
-mela %>% mutate(
-  status = status,
-  sex= sex %>% as.factor(),
-  ulcer = ulcer %>% as.factor(),
-  status_bin = if_else(status ==1,0,1) ,
-  id = row_number()) -> mela
-
-mela %>% summary() 
-```
-
-
-time :survival time in days, possibly censored.
-Event en compétition : 
-status : 1 died from melanoma, 2 alive, 3 dead from other causes.
- 
-Variable hierarchique :
-ulcer : 1 = presence, 0 = absence.
-
-Les autres variables : 
-sex: 1 = male, 0 = female.
-age: age in years.
-year: of operation.
-thickness :tumour thickness in mm.
+status 0=alive, 1=died from melanoma, 2=dead from other causes.
+sex 1 = male, 0 = female.
+age age in years.
+year of operation.
+thickness tumor thickness in mm.
+ulcer 1 = presence, 0 = absence.
 
 https://rdrr.io/cran/MASS/man/Melanoma.html
 
-1.	Décrire la base de données en fonction du traitement (test stat et visualisation)
+#1.	Décrire la base de données en fonction du traitement (test stat et visualisation)
 ```{r}
-#chi2 et student ??Genre voir si les deux populations des deux traitements sont comparables et tout...
+#chi2 et student ??Genre voir si les deux populations des deux traitements sont comparables et tout... + visualisation 
+#gtsummary()
+# kapalan meier ? pour decrire 
 ```
 
-2.	Tracer les courbes de survie de chaque événement
+#2.	Tracer les courbes de survie de chaque événement
 courbes de survie : test de logrank 
 ```{r}
-# estimation de la fonction de survie (proba de ne pas avoir fait l’event avant le temps t ) par la méthode KM
-km <- survfit(Surv(time,status_bin)~ulcer,data=mela) 
+Melanoma %>% 
+  filter(status != 3) %>% 
+  mutate(status = as.integer(recode(status, '2' = 0, '1' = 1)),
+  status_bin = if_else(status ==1,1,0))-> mela2
+
+# estimation de la fonction de survie par la méthode KM
+km <- survfit(Surv(time/365.25,status)~ulcer,mela2)
+#summary(km)
+```
 
 
+```{r}
 # plot de la fonction de survie estimée
 ggsurvplot(km, 
-           data = mela,
+           data = mela2,
            surv.median.line = "hv", 
            
  # Change legends: title & labels
  legend.title = "Ucler",
  legend.labs = c("Absent", "Présent"),
+ 
  # Add p-value and intervals
  pval = TRUE,
  conf.int = TRUE,
@@ -80,145 +87,535 @@ ggsurvplot(km,
  tables.theme = theme_cleantable(),
  palette = c("#C0B9DD", "#77CB85"),
  ggtheme = theme_bw())
+```
 
 
-# permet de comparer les courbes de survie par le test du logrank
+```{r}
+#life table
+summary(km, times = c(0, 1, 2, 3, 4, 5))
+```
+
+
+```{r}
 #H0 Egalité des fonctions de survie vs.
 #H1 Au moins une des fonctions de survie est différente des autres
 
-#comparer le nb d'event obs dans chaque groupe (traitement ici) à ce qui est attendu sous H0
-survdiff(Surv(time,status_bin)~ulcer,data=mela)
-
-
+#comparer le nb d'event obs dans chaque groupe à ce qui est attendu sous H0
+survdiff(Surv(time/365.25,status)~ulcer,mela2)
 ```
 
-3.	Quantifier l’effet du traitement sur chaque événement, ajusté sur les facteurs
+
+
+#3.	Quantifier l’effet du traitement sur chaque événement, ajusté sur les facteurs
 
 Modle de cox ?
-Modélisation de la fonction de risque instantané en prenant en compte les covariables Z
+Modélisation de la fonction de risque instantané en prenant en compte les covariables
+la variable hiérarchique tu laisse de côté tu fais ton cox normal avec tes variables
+
+
+Le modèle de Cox permet d’obtenir des hazard ratios (HR) = ratio des fonctions de risque instantané du groupe 1 et du groupe 0
+
+HR < 1 → Facteur protecteur : le risque instantané du groupe 1 est moins élevé que le risque instanténe du groupe 0
+HR = 1 → Pas d’effet de la variable : le risque instantané du groupe 1 équivaut à celui du groupe 0
+HR > 1 → Facteur de risque : le risque instantané du groupe 1 est plus élevé que le risque instanténe du groupe 0
+
+The HR is interpreted as the instantaneous rate of occurrence of the event of interest in those who are still at risk for the event. It is not a risk, though it is commonly mis-interpreted as such.
+
+
+Les hypothèses du modèle de Cox :
+
+- La log-linéarité 
+ResMart <− residuals(coxph(Surv(stop, recidive) ~ treatment +number ,data = bladder_v1) ,type = " martingale " ) 
+plot ( bladder_v1$number ,resMart ,main = " Martingale −residuals for number" ,xlab = "Number" , ylab = " Residus " ,pch = 20)
+lines(loess.smooth(bladder_v1$number, resMart), lwd = 2, col = "blue " )
+La proportionnalité est respectée si la courbe est de forme linéaire proche de 0
+
+
+
+- La proportionnalité des risques
+cox.zph(coxph(Surv(stop, recidive) ~ treatment + number,data = bladder_v1))
+
+Si l’hypothèse n’est pas respectée :
+Stratifier le modèle sur la variable qui ne respecte pas l’hypothèse en utilisant l’option strata
+Inclure une interaction entre le temps et la variable qui ne respecte pas l’hypothèse
+
 ```{r}
-mela %>% 
-  mutate(ucler = ulcer %>% as.factor) -> mela
-
 #Creation du modèle de cox
-model <- coxph(Surv(time,status_bin)~ulcer+thickness+sex+age+year,data=mela)
-summary(model)
+model <- coxph(Surv(time/365.25,status)~ulcer+thickness+age+year,mela2)
+model %>% 
+  tbl_regression(exp = TRUE) 
+```
 
-# HHP
+hazard ratio = exp(coef)
+
+A hazard is the term given to the rate at which events happen. The probability that an event will happen over a period of time is the hazard multiplied by the time interval. An assumption of CPH is that hazards are constant over time (see below).
+
+For a given predictor then, the hazard in one group (say males) would be expected to be a constant proportion of the hazard in another group (say females). The ratio of these hazards is, unsurprisingly, the hazard ratio.
+
+The hazard ratio differs from the relative risk and odds ratio. The hazard ratio represents the difference in the risk of an event at any given time, whereas the relative risk or odds ratio usually represents the cumulative risk over a period of time.
+
+```{r}
+# Hypo Proportionnalité des risques
 cox.zph(model)
+```
+P value de thickness > 0.05 donc modele pas validé pour thickness     
 
+
+```{r}
+#On stratifie sur cette variable (thickness) mais on peut plus l'utiliser
+model2 <- coxph(Surv(time/365.25,status)~ulcer+strata(thickness)+age+year,mela2)
+cox.zph(model2)
+model2 %>% 
+  tbl_regression(exp = TRUE) 
+```
+
+
+```{r}
+#On mets une variable dépendante du temps
+mela2_t <- survSplit(mela2,cut=c(200),end="time",start="0",event="status")
+
+mela2_t$thickness_new=I(mela2_t$thickness)*as.numeric(mela2_t$time>200)
+model_t <-coxph(Surv(time/365.25,status)~ulcer+thickness_new+age+year,mela2_t)
+
+cox.zph(model_t)
+model_t %>% 
+  tbl_regression(exp = TRUE) 
+```
+
+
+```{r}
 # Hypothèses de log linéarité
-resmart = residuals(model)
+resmart <- residuals(model,type ="martingale")
 
 # Age
-plot(mela$age, resmart, pch = 20) +
-lines(loess.smooth(mela$age, resmart), lwd=2, col="blue")
+plot(mela2$age, resmart, pch = 20) +
+lines(loess.smooth(mela2$age, resmart), lwd=2, col="blue")
 
 # year
-plot(mela$year, resmart, pch = 20) +
-lines(loess.smooth(mela$year, resmart), lwd=2, col="blue")
+plot(mela2$year, resmart, pch = 20) +
+lines(loess.smooth(mela2$year, resmart), lwd=2, col="blue")
 
 # thickness
-plot(mela$thickness, resmart, pch = 20)+
-lines(loess.smooth(mela$thickness, resmart), lwd=2, col="blue")
+plot(mela2$thickness, resmart, pch = 20)+
+lines(loess.smooth(mela2$thickness, resmart), lwd=2, col="blue")
 
 ```
 
-4.	Prendre en compte l’effet hiérarchique
-```{r}
 
+
+#4.	Prendre en compte l’effet hiérarchique
+
+Modele de fragilité
+les modèles à fragilité permettent de prendre en compte l’hétérogénéité des données mais aussi la dépendance entre les temps d’évènements.
+
+ωk est la fragilité du groupe k
+Interprétation
+Si ωk > 1 : les patients au sein d’un même cluster ont tendance à présenter l’évènement plus rapidement que si on avait fait un modèle sans dépendance
+Si ωk < 1 : les patients au sein d’un même cluster ont tendance à présenter l’évènement moins rapidement que si on avait fait un modèle sans dépendance
+
+
+Hypothèses et propriétés du modèle
+Observations indépendantes conditionnellement aux ωk
+
+Les lois Gamma et gaussienne sont souvent utilisées pour la loi des effets aléatoires de variance θ qui mesure l’hétérogénéité entre les groupe : une variance importante entraîne une grande variabilité entre les groupes.
+
+Proportionnalité des risques conditionnellement aux valeur ωk → interprétation des β conditionnelle à la fragilité.
+Par exemple, si Zik = 0 ou 1, cela signifie que eβ représente le risque entre un sujet codé 1 et un sujet codé 0 au sein d’un même groupe.
+
+On peut comparer les modèles avec et sans effet aléatoire par le critère AIC et on garde le modèle minimisant l’AIC
+```{r}
+#Les "gamma" dans la sortie du code représentent les valeurs des effets aléatoires dans chaque sous-groupe
+#modèle de fragilité
+model_f <- coxph(Surv(time/365.25,status)~ulcer+thickness+age+year+frailty(sex),mela2)
+model_f %>% 
+  summary()
+
+#AIC(model_f)
+```
+Sex -> pas d'effet centre car pas significatif 
+
+
+#5.	Quelles sont les limites de ces analyses?
+
+
+
+#6.	Faire les mêmes analyses en risques compétitifs: Tracer incidence cumulée et utiliser le modèle de Fine and Gray
+```{r}
+Melanoma %>% mutate(
+  status = as.factor(recode(status, '2' = 0, '1' = 1, '3' = 2)),
+  status_bin = if_else(status ==1,1,0)) -> mela
 ```
 
-5.	Quelles sont les limites de ces analyses?
 
 
-6.	Faire les mêmes analyses en risques compétitifs: Tracer incidence cumulée et utiliser le modèle de Fine and Gray
 ```{r}
-#KM
-km <- survfit(Surv(time,status)~ulcer,data=mela)
-summary(km)
-ggsurvplot(km, 
-           data = mela,
-           surv.median.line = "hv", 
-           
- # Change legends: title & labels
- legend.title = "Ucler",
- legend.labs = c("Absent", "Présent"),
- # Add p-value and intervals
- pval = TRUE,
- conf.int = TRUE,
- 
- # Add risk table
- risk.table = TRUE,
- tables.height = 0.2,
- tables.theme = theme_cleantable(),
- palette = c("#C0B9DD", "#77CB85"),
- ggtheme = theme_bw())
+# Kalbfleisch et Prentice : prend en compte l’information apportée par la survenue des évènements en compétition avant l’évènement d’intérêt.
+#Status
+# 1: pour les patients ayant fait l’évènement d’intérêt
+# 0: pour les censures/ en vie
+# 2: pour les patients ayant fait l’évènement en compétition
+
+#Cumulative incidence
+#Kalbfleisch and Prentice 
+kalb_p <- tidycmprsk::cuminc(Surv(time/365.25, status) ~ ulcer,mela)
+kalb_p
 
 
-#Kalbfleisch et Prentice
-KM2<-plot(cuminc(mela$time,mela$status,mela$ulcer),
-          col=c("blue","red","green","blue","red","green"),lty=c(1,1,2,2,3,3),
-          xlab="Temps",ylab="Incidence cumulée",
-          main="Kalbfleish et Prentice")
+#By default it plots the first event type only. 
+#So the following plot shows the cumulative incidence of death from melanoma: status == 0
+# cuminc(Surv(time/365.25, status) ~ ulcer,mela) %>% 
+#   ggcuminc() + 
+#   labs(
+#     x = "years"
+#   ) + 
+#   add_confidence_interval() +
+#   add_risktable()
 
-#test de gray
-cuminc(mela$time,mela$status,mela$ulcer)
+
+#If we want to include both event types, specify the outcomes in the ggcuminc(outcome=) argument:
+kalb_p %>% 
+  ggcuminc(outcome = c("1", "2")) +
+  ylim(c(0, 1)) + 
+  labs(
+    x = "Years"
+  ) + 
+  add_confidence_interval() +
+  add_risktable()
 
 
-#Model de fine and gray
-cov1 <- model.matrix(~ factor(ulcer) +thickness+sex+age+year,data = mela)[, -1] # met en forme les covariables pour le modèle
 
-mod2<-crr(mela$time,mela$status,cov1=cov1)
-summary(mod2)
+# we wanted to examine death from melanoma or other causes in the Melanoma data, according to ulcer
+# the presence or absence of ulceration
 
+#We can estimate the cumulative incidence at various times by group and display that in a table using the tbl_cuminc() 
+#and add Gray’s test to test for a difference between groups over the entire follow-up period using the add_p() function.
+inc_cum <- tidycmprsk::cuminc(Surv(time, status) ~ ulcer, data = mela)
+
+inc_cum %>% 
+  tbl_cuminc(
+    times = 1826.25, #5ans 
+    label_header = "**{time/365.25}-year cuminc**") %>% 
+  add_p()
+
+
+#Then we can see the plot of death due to melanoma, according to ulceration status
+inc_cum %>% 
+  ggcuminc() + 
+  labs(
+    x = "Days"
+    
+  ) + 
+  add_confidence_interval() +
+  add_risktable()
+```
+Significatif : pas independance de l'incidence 
+comme logrank 
+
+
+ Subdistribution hazards
+ instantaneous rate of occurrence of the given type of event in subjects who have not yet experienced an event of that type
+ estimated using Fine-Gray regression (crr function)
+
+
+Let’s say we’re interested in looking at the effect of age and sex on death from melanoma, with death from other causes as a competing event.
+
+
+
+```{r}
+#the subdistribution hazards 
+#### Fine and gray
+fine_gray <-tidycmprsk::crr(Surv(time/365.25, status) ~ ulcer+ thickness+sex + age +year, mela)
+
+fine_gray %>% 
+  summary()
+
+#we can generate tables of formatted results using the tbl_regression() function from the {gtsummary} package, with the option exp = TRUE to obtain the hazard ratio estimates:
+
+fine_gray %>% 
+  tbl_regression(exp = TRUE)
+#We see that male sex (recall that 1=male, 0=female in these data) is significantly associated with increased hazard of death due to melanoma, whereas age was not significantly associated with death due to melanoma.
+```
+
+
+HYPOTHESE FG : 
+
+Proportionnalité des risques
+
+- Méthode graphique à partir des résidus de Schoenfelds. La proportionnalité est respectée si la moyenne des résidus est constante au cours du temps et proche de 0.
+
+- Test de Wang-Lin basé sur la somme cumulée des résidus: proportionnalité respectée si p-valeur > 0.05
+
+
+Plots of the Schoenfeld residuals
+```{r}
+cov1 <- model.matrix(~ factor(ulcer)+ thickness+sex + age +year,data = mela)[, -1] # met en forme les covariables pour le modèle
+mod2<-cmprsk::crr(mela$time/365.25,mela$status,cov1=cov1)
 for(j in 1:ncol(mod2$res))
 scatter.smooth(mod2$uft, mod2$res[,j],
                main = names(mod2$coef)[j],
                xlab ="Temps",
                ylab ="Résidus de Schoenfeld")
 
-
-
-#test de lin
-library(remotes)
-library(crskdiag) 
-diag_crr(Crsk(stop,recidive)~treatment+number,data=bladder_v2,test="prop",seed=1234)#permet de faire le test de Lin
 ```
+#7.	Commenter
 
-7.	Commenter
+
+#8.	Choisir une méthode de validation des données : traint-test split, k-folds, etc.
+-> crée un jeu de test et de train
 ```{r}
-install.packages('/Users/anto/Downloads/crskdiag_1.0.1.tar', repos=NULL, type='source')
+mela %>% 
+  select(-status_bin) %>%
+  mutate(status2 = status %>% as.integer(),
+         status2= if_else(status2 ==3,2,if_else(status2==2,1,0)),
+         status = status2) %>% select(-status2) -> mela_ML
+
+train <- sample_frac(mela_ML, 0.8) %>% as.data.frame() 
+test <- anti_join(mela_ML, train) %>% as.data.frame()
+
 ```
 
-8.	Choisir une méthode de validation des données : traint-test split, k-folds, etc.
+
+#9.	Choisir une méthode de ML afin de classer les patients selon l’événement d’intérêt
+
+-	Modèles – tuning : le tuning des hyperparamètres c’est comme un grid search, les variables qu’on teste 
+c’est nodesizeTry (taille des nœuds) et 
+mtry (nombre de division par nœuds) on fixe les autres hyperparamètres en accord avec notre nombre de variables (5) explications dans les commentaires du code
+
+
+-	Modèles – choix : trois modèles, 1 d’interet et deux d’analyses de sensibilité. 
+
+
+Premier modèle (sensibilité) : risque équivalent entre les deux risques. Le poids est le même, le modèle essaye de prédire le risque pour chaque evenement. 
+
+Deuxième modèle celui d’interet : le modèle essaye de prédire le risque en priorité pour notre evenement d’interet (ISC). 
+
+Troisième modèle (sensibilité) ; le modèle essaye de prédire le risque en priorité pour l’evenement en competition (UAE).
 ```{r}
+## Modele equilibré
+mod_eq <- tune(Surv(time, status) ~ ., train,
+               mtryStart = sqrt(5), # Car on a 5 variables
+                nodesizeTry = c(1:9, seq(10, 64, by = 5)), # Afin d'avoir une granularité au début puis 2^5 car nous avons 5 variables
+                nodedepth = 10, # Car on a 5 variables : traitement, age, sexe et dose
+                ntreeTry = 1000, # Nombre d'arbre suffisant
+                nsplit = 1, # 1 Seul split pour diviser en deux à chaque fois
+                maxIter = 25, # Sinon trop long
+               doBest = TRUE)
 
+ns_eq = as.numeric(mod_eq$optimal["nodesize"])
+mtry_eq = as.numeric(mod_eq$optimal["mtry"])
+
+
+
+## Modele favorisant "Death Melanoma" (notre risque en priorité)
+mod_deathM <- tune(Surv(time, status) ~ ., train,
+                splitrule = "logrank", cause = c(1,0), importance = TRUE,
+                mtryStart = sqrt(5), # Car on a 5 variables
+                nodesizeTry = c(1:9, seq(10, 64, by = 5)), # Afin d'avoir une granularité au début puis 2^5 car nous avons 5 variables
+                nodedepth = 10, # Car on a 5 variables : traitement, age, sexe et dose
+                ntreeTry = 1000, # Nombre d'arbre suffisant
+                nsplit = 1, # 1 Seul split pour diviser en deux à chaque fois
+                maxIter = 25, # Sinon trop long
+                doBest = TRUE)
+
+ns_deathM = as.numeric(mod_deathM$optimal["nodesize"])
+mtry_deathM = as.numeric(mod_deathM$optimal["mtry"])
+
+
+## Modele ## Modele favorisant "Death Other" (notre risque en compétition)
+mod_deathO<- tune(Surv(time, status) ~ ., train,
+                splitrule = "logrank", cause = c(0,1), importance = TRUE,
+                
+                mtryStart = sqrt(5), # Car on a 5 variables
+                nodesizeTry = c(1:9, seq(10, 64, by = 5)), # Afin d'avoir une granularité au début puis 2^5 car nous avons 5 variables
+                nodedepth = 10, # Car on a 5 variables : traitement, age, sexe et dose
+                ntreeTry = 1000, # Nombre d'arbre suffisant
+                nsplit = 1, # 1 Seul split pour diviser en deux à chaque fois
+                maxIter = 25, # Sinon trop long
+                doBest = TRUE)
+
+ns_deathO = as.numeric(mod_deathO$optimal["nodesize"])
+mtry_deathO= as.numeric(mod_deathO$optimal["mtry"])
 ```
 
-9.	Choisir une méthode de ML afin de classer les patients selon l’événement d’intérêt
+
+
 ```{r}
+# Hyperparamètres
+nodedepth = 8 # Car on a 4 variables : traitement, age, sexe et dose
+ntree = 1000 # Nombre d'arbre suffisant
 
+## Analysis 1
+## modified Gray's weighted log-rank splitting
+rsf_eq <- rfsrc(Surv(time, status) ~ ., train, importance = TRUE,
+                ntree = ntree, 
+                nodedepth = nodedepth,
+                mtry = mtry_eq,
+                nodesize = ns_eq)
+
+
+#plot(get.tree(rsf_eq, tree.id = 6)) # arbre d'exemple
+rsf_eq.pred <- predict(rsf_eq, newdata = test, importance = TRUE)
+rsf_eq.pred
+#Requested performance error(1-C Index) :  DeathMela : 0.14901478, death_other : 0.41818182
+
+
+#premier graph c’est l’erreur en fonction du nombre d’arbre créé avec l’importance des variables pour le modèle. 
+plot(rsf_eq.pred)
+
+#Le deuxième graph c’est la fonction de risque instantané cause spécifique, l’incidence cumulée et 
+#le la probabilité cumulée (méthode de Gray)
+plot.competing.risk(rsf_eq.pred)
+
+# CSCHF = Cause specific continuous hazard function
+# CIF = Cumulative incidence
+# CPC = Cumulative probability
 ```
 
-10.	Evaluer les performances du modèle
+
 ```{r}
+### Analysis 2
+## log-rank cause-1 (Death Melanoma) and targeted VIMP
+rsf_deathM <- rfsrc(Surv(time, status) ~ ., train,
+                splitrule = "logrank", cause = c(1,0), importance = TRUE,
+                ntree = ntree, 
+                nodedepth = nodedepth,
+                mtry = mtry_deathM,
+                nodesize = ns_deathM)
+
+#plot(get.tree(rsf_deathM, tree.id = 10)) # arbre d'exemple
+rsf_deathM.pred <- predict(rsf_deathM, newdata = test, importance = TRUE)
+rsf_deathM.pred
+
+# Requested performance error (1-C Index): deathMela = 0.18472906, deathOther =  0.50909091
+
+#premier graph c’est l’erreur en fonction du nombre d’arbre créé avec l’importance des variables pour le modèle. 
+plot(rsf_deathM.pred)
+
+#Le deuxième graph c’est la fonction de risque instantané cause spécifique, l’incidence cumulée et 
+#le la probabilité cumulée (méthode de Gray)
+par(cex.axis = .0, cex.lab = 4.0, cex.main = 4.0, mar = c(6.0,6,1,1), mgp = c(4, 1, 0))
+plot.competing.risk(rsf_deathM.pred)
 
 ```
 
-11.	Identifier les variables qui semblent le mieux permettre cette classification
+
 ```{r}
+## Analysis 3
+## log-rank cause-2 (Death other) specific splitting and targeted VIMP
+rsf_deathO <- rfsrc(Surv(time, status) ~ ., train,
+                splitrule = "logrank", cause = c(0,1), importance = TRUE,
+                ntree = ntree, 
+                nodedepth = nodedepth,
+                mtry = mtry_deathO,
+                nodesize = ns_deathO)
+rsf_deathO
 
+#plot(get.tree(rsf_uae, tree.id = 10)) # arbre d'exemple
+
+rsf_deathO.pred <- predict(rsf_deathO, newdata = test, importance = TRUE)
+rsf_deathO.pred
+# Requested performance error (1-C Index): deathMela = 0.17857143, deathOther = 0.50909091
+
+
+plot(rsf_deathO.pred)
+plot.competing.risk(rsf_deathO.pred)
 ```
 
-12.	Répondre à la question du projet
+#10.	Evaluer les performances du modèle  (TP2)
+Modèles évaluation : si vous lancez juste l’objet du modèle vous aurez le 1 - C index (Requested performance error) pour chaque evenement, en premier l’event 1 et en deuxième l’event deux.
+
+The concordance index or C-index is a generalization of the area under the ROC curve (AUC) that can take into account censored data. It represents the global assessment of the model discrimination power: this is the model’s ability to correctly provide a reliable ranking of the survival times based on the individual risk scores. It can be computed with the following formula:
+
+
+Similarly to the AUC, 
+
+C-index=1
+ corresponds to the best model prediction, and
+ 
+C-index=0.5
+ represents a random prediction.
+ 
+ Harrell’s C-index (1 minus concordance)
+ the patient with the higher risk score should have a shorter time-to-disease.
+ 
+ 
+ Values of c near 0.5 indicate that the risk score predictions are no better than a coin flip in determining which patient will live longer. Values near 1 indicate that the risk scores are good at determining which of two patients will have the disease first. Values near 0 means that the risk scores are worse than a coin flip: you might be better off concluding the opposite of what the risk scores tell you.
+
 ```{r}
-
+rsf_eq.pred
+rsf_deathM.pred
+rsf_deathO.pred
 ```
 
-13.	Enoncer les difficultés rencontrées et les solutions apportées
+#11.	Identifier les variables qui semblent le mieux permettre cette classification
+
+Importance des variables : importance des variables avec leur intervalle de confiance avec le graph associée (boxplot). Il s’agit des VIMP (variable importance) des modèles entrainés. 
+
 ```{r}
+# Modèle 1 : eq
+eq_ic <- subsample(rsf_eq, verbose = FALSE)
 
+# take a delete-d-jackknife procedure for example
+eq_ic_table <- extract.subsample(eq_ic)$var.jk.sel.Z %>% 
+  mutate_at(vars(lower, mean, upper), funs(round(.,2))) %>% 
+  rownames_to_column("Variable") %>% 
+  arrange(desc(mean)) %>% 
+  flextable()
+
+eq_ic_table
+plot.subsample(eq_ic)
 ```
+
+
+```{r}
+# Modèle 2 : deathM
+
+deathM_ic <- subsample(rsf_deathM, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+deathM_ic_table <- extract.subsample(deathM_ic)$var.jk.sel.Z %>% 
+  mutate_at(vars(lower, mean, upper), funs(round(.,2))) %>% 
+  rownames_to_column("Variable") %>% 
+  arrange(desc(mean)) %>% 
+  flextable()
+
+deathM_ic_table
+plot.subsample(deathM_ic)
+```
+
+
+```{r}
+# Modèle 3 : deathOther
+
+deathO_ic <- subsample(rsf_deathO, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+deathO_ic_table <- extract.subsample(deathO_ic)$var.jk.sel.Z %>% 
+  mutate_at(vars(lower, mean, upper), funs(round(.,2))) %>% 
+  rownames_to_column("Variable") %>% 
+  arrange(desc(mean)) %>% 
+  flextable()
+
+deathO_ic_table
+plot.subsample(deathO_ic)
+```
+Pour le VIMP des modèles prédits vous pouvez pas avoir l’intervalle de confiance c’est un limitation du package. Il s’agit du dernier chunk, c’est le VIMP pour chaque modèle.
+```{r}
+vimpOut <- data.frame(md = max.subtree(rsf_eq)$order[, 1],
+                      vimp.deathM = 100 * rsf_deathM.pred$importance[ ,1],
+                      vimp.deahtO = 100 * rsf_deathO.pred$importance[ ,2]) %>% 
+  round(digits = 2)
+
+vimpOut <- rownames_to_column(vimpOut, "variable") 
+  
+vimpOut %>% 
+  flextable()
+```
+```
+
+
+#12.	Répondre à la question du projet
+
+
+#13.	Enoncer les difficultés rencontrées et les solutions apportées
+
 
 
